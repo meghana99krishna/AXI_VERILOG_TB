@@ -1,7 +1,7 @@
 // axi_lite_slave_clean.sv
 // Simple AXI-Lite slave (single-beat writes & reads), robust handshakes, no deadlock.
 
-module axi_lite_slave_clean #(
+module axi_lite_slave #(
     parameter ADDR_WIDTH = 4,
     parameter DATA_WIDTH = 32
 )(
