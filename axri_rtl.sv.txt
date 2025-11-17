@@ -1,0 +1,168 @@
+// axi_lite_slave_clean.sv
+// Simple AXI-Lite slave (single-beat writes & reads), robust handshakes, no deadlock.
+
+module axi_lite_slave_clean #(
+    parameter ADDR_WIDTH = 4,
+    parameter DATA_WIDTH = 32
+)(
+    input  logic                   clk,
+    input  logic                   resetn,
+
+    // Write Address Channel
+    input  logic [ADDR_WIDTH-1:0]  AWADDR,
+    input  logic                   AWVALID,
+    output logic                   AWREADY,
+
+    // Write Data Channel
+    input  logic [DATA_WIDTH-1:0]  WDATA,
+    input  logic                   WVALID,
+    output logic                   WREADY,
+
+    // Write Response Channel
+    output logic [1:0]             BRESP,
+    output logic                   BVALID,
+    input  logic                   BREADY,
+
+    // Read Address Channel
+    input  logic [ADDR_WIDTH-1:0]  ARADDR,
+    input  logic                   ARVALID,
+    output logic                   ARREADY,
+
+    // Read Data Channel
+    output logic [DATA_WIDTH-1:0]  RDATA,
+    output logic [1:0]             RRESP,
+    output logic                   RVALID,
+    input  logic                   RREADY
+);
+
+    // Simple memory
+    logic [DATA_WIDTH-1:0] mem[0:(1<<ADDR_WIDTH)-1];
+
+    // Latched address/data for writes
+    logic [ADDR_WIDTH-1:0] awaddr_q;
+    logic [DATA_WIDTH-1:0] wdata_q;
+
+    // Flags indicating latched-but-not-yet-used parts
+    logic aw_latched;
+    logic w_latched;
+    logic write_pending; // write has been performed and awaiting BVALID->BREADY
+
+    // ---------------------------------------
+    // AWREADY: one-cycle accept pulse when AWVALID is seen
+    // ---------------------------------------
+    always_ff @(posedge clk or negedge resetn) begin
+        if (!resetn) begin
+            AWREADY <= 1'b0;
+        end
+        else begin
+            // generate a one-cycle accept pulse when master asserts AWVALID
+            // only accept when we are not already holding a latched address awaiting data/response
+            AWREADY <= (AWVALID && !aw_latched && !write_pending);
+        end
+    end
+
+    // Latch AWADDR when handshake (sample on posedge using AWREADY && AWVALID)
+    always_ff @(posedge clk or negedge resetn) begin
+        if (!resetn) begin
+            awaddr_q  <= '0;
+            aw_latched <= 1'b0;
+        end
+        else begin
+            if (AWVALID && AWREADY) begin
+                awaddr_q   <= AWADDR;
+                aw_latched <= 1'b1;
+            end
+            // if write completed and response accepted, clear latched flag
+            else if (write_pending && BVALID && BREADY) begin
+                aw_latched <= 1'b0;
+            end
+        end
+    end
+
+    // ---------------------------------------
+    // WREADY: one-cycle accept pulse when WVALID is seen
+    // ---------------------------------------
+    always_ff @(posedge clk or negedge resetn) begin
+        if (!resetn) begin
+            WREADY <= 1'b0;
+        end
+        else begin
+            WREADY <= (WVALID && !w_latched && !write_pending);
+        end
+    end
+
+    // Latch WDATA when handshake
+    always_ff @(posedge clk or negedge resetn) begin
+        if (!resetn) begin
+            wdata_q   <= '0;
+            w_latched <= 1'b0;
+        end
+        else begin
+            if (WVALID && WREADY) begin
+                wdata_q   <= WDATA;
+                w_latched <= 1'b1;
+            end
+            else if (write_pending && BVALID && BREADY) begin
+                w_latched <= 1'b0;
+            end
+        end
+    end
+
+    // ---------------------------------------
+    // When both AW and W are latched, perform memory write and assert BVALID
+    // ---------------------------------------
+    always_ff @(posedge clk or negedge resetn) begin
+        if (!resetn) begin
+            write_pending <= 1'b0;
+            BVALID        <= 1'b0;
+            BRESP         <= 2'b00;
+        end
+        else begin
+            // start write operation when both address and data latched and no response pending
+            if (aw_latched && w_latched && !write_pending) begin
+                mem[awaddr_q] <= wdata_q;
+                write_pending <= 1'b1;
+                BVALID        <= 1'b1;  // response available
+                BRESP         <= 2'b00; // OKAY
+            end
+            // clear response when master accepts it
+            else if (BVALID && BREADY) begin
+                write_pending <= 1'b0;
+                BVALID        <= 1'b0;
+            end
+        end
+    end
+
+    // ---------------------------------------
+    // READ CHANNEL
+    // ---------------------------------------
+    // ARREADY: one-cycle accept pulse when ARVALID seen and no outstanding RVALID
+    always_ff @(posedge clk or negedge resetn) begin
+        if (!resetn) begin
+            ARREADY <= 1'b0;
+        end
+        else begin
+            ARREADY <= (ARVALID && !RVALID);
+        end
+    end
+
+    // Serve read on handshake: latch address and present data next cycle
+    always_ff @(posedge clk or negedge resetn) begin
+        if (!resetn) begin
+            RVALID <= 1'b0;
+            RDATA  <= '0;
+            RRESP  <= 2'b00;
+        end
+        else begin
+            if (ARVALID && ARREADY) begin
+                RDATA <= mem[ARADDR];
+                RRESP <= 2'b00;
+                RVALID <= 1'b1;
+            end
+            else if (RVALID && RREADY) begin
+                RVALID <= 1'b0;
+            end
+        end
+    end
+
+endmodule
