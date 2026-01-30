@@ -173,3 +173,120 @@ module axi_lite_tb_clean;
     end
 
 endmodule
+
+/////////////////////
+`ifndef AXI_SCOREBOARD_SV
+`define AXI_SCOREBOARD_SV
+
+import uvm_pkg::*;
+`include "uvm_macros.svh"
+
+////////////////////////////////////////////////////////////
+// AXI TRANSACTION
+////////////////////////////////////////////////////////////
+class axi_txn extends uvm_sequence_item;
+
+  bit        is_expected;   // 1 = expected, 0 = actual
+  bit [3:0]  id;
+  bit [31:0] addr;
+  bit [31:0] data;
+  bit [1:0]  resp;
+
+  `uvm_object_utils(axi_txn)
+
+  function new(string name="axi_txn");
+    super.new(name);
+  endfunction
+
+endclass
+
+
+////////////////////////////////////////////////////////////
+// AXI SCOREBOARD
+////////////////////////////////////////////////////////////
+class axi_scoreboard extends uvm_scoreboard;
+  `uvm_component_utils(axi_scoreboard)
+
+  // Single analysis implementation port
+  uvm_analysis_imp #(axi_txn, axi_scoreboard) analysis_export;
+
+  // Queues per ID
+  axi_txn exp_q[int][$];   // expected queue
+  axi_txn act_q[int][$];   // actual queue
+
+  function new(string name, uvm_component parent);
+    super.new(name, parent);
+    analysis_export = new("analysis_export", this);
+  endfunction
+
+
+  ////////////////////////////////////////////////////////////
+  // write() : STORE ONLY
+  ////////////////////////////////////////////////////////////
+  function void write(axi_txn tx);
+    if (tx.is_expected) begin
+      exp_q[tx.id].push_back(tx);
+      `uvm_info("AXI_SB",
+        $sformatf("Stored EXPECTED ID=%0d DATA=0x%0h", tx.id, tx.data),
+        UVM_DEBUG)
+    end
+    else begin
+      act_q[tx.id].push_back(tx);
+      `uvm_info("AXI_SB",
+        $sformatf("Stored ACTUAL ID=%0d DATA=0x%0h", tx.id, tx.data),
+        UVM_DEBUG)
+    end
+  endfunction
+
+
+  ////////////////////////////////////////////////////////////
+  // run_phase : COMPARE WHEN BOTH QUEUES HAVE DATA
+  ////////////////////////////////////////////////////////////
+  task run_phase(uvm_phase phase);
+    axi_txn exp_tx, act_tx;
+
+    forever begin
+      foreach (exp_q[id]) begin
+        if (exp_q[id].size() > 0 &&
+            act_q.exists(id) &&
+            act_q[id].size() > 0) begin
+
+          exp_tx = exp_q[id].pop_front();
+          act_tx = act_q[id].pop_front();
+
+          compare_txn(exp_tx, act_tx);
+        end
+      end
+
+      // Prevent busy looping
+      #1ns;
+    end
+  endtask
+
+
+  ////////////////////////////////////////////////////////////
+  // Compare logic
+  ////////////////////////////////////////////////////////////
+  function void compare_txn(axi_txn exp, axi_txn act);
+
+    if (exp.data !== act.data || exp.resp !== act.resp) begin
+      `uvm_error("AXI_SB",
+        $sformatf(
+          "MISMATCH ID=%0d | EXP:data=0x%0h resp=%0d | ACT:data=0x%0h resp=%0d",
+          exp.id, exp.data, exp.resp,
+          act.data, act.resp))
+    end
+    else begin
+      `uvm_info("AXI_SB",
+        $sformatf(
+          "MATCH ID=%0d ADDR=0x%0h DATA=0x%0h",
+          exp.id, exp.addr, exp.data),
+        UVM_LOW)
+    end
+
+  endfunction
+
+endclass
+
+`endif
+
